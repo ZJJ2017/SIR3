@@ -1,0 +1,29 @@
+hyper_params:
+  gamma: 0.99
+  tau: 0.005
+  batch_size: 256
+  buffer_size: 200000
+  start_timesteps: 0
+  total_timesteps: 300000
+  policy_freq: 2
+  # fD
+  per_alpha: 0.3
+  per_beta: 1.0
+  per_eps: 0.000006
+  per_eps_demo: 1.0 
+  nStep: 1
+  nStepLossRation: 1
+  pretrainStep: 0
+  randomSampleNumInPretrain: 5000
+  lambda3: 1.0  # actor loss contribution of prior weight
+  demo_path: "data/suboptimal/reacher_v2/reacher_demo_r-38_sr-7_n551_t20.pkl"
+
+learner_cfg:
+  lr_actor: 0.0003
+  lr_critic: 0.0003
+  weight_decay: 0.05
+
+noise_cfg:
+  expl_noise: 0.1
+  policy_noise: 0.2
+  noise_clip: 0.5

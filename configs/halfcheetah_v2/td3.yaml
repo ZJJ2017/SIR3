@@ -1,0 +1,18 @@
+hyper_params:
+  gamma: 0.99
+  tau: 0.005
+  batch_size: 256
+  buffer_size: 200000
+  start_timesteps: 10000
+  total_timesteps: 1000000
+  policy_freq: 2
+
+learner_cfg:
+  lr_actor: 0.0003
+  lr_critic: 0.0003
+  weight_decay: 0.0
+
+noise_cfg:
+  expl_noise: 0.1
+  policy_noise: 0.2
+  noise_clip: 0.5
