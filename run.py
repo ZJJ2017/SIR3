@@ -14,7 +14,7 @@ from utils.envWrapper import RobosuiteWrapper, gymnasium_wrapper
 from utils.helper_functions import set_random_seed
 from utils.config import YamlConfig, ConfigDict
 from utils.expUtils import str2bool
-from rl_algorithms import R2, TD3, SQIL, TD3fD, R2
+from rl_algorithms import TD3, SQIL, TD3fD, R2, SAC
 # from rl_algorithms import DDPG, SIR3, TD3, SILCR, SAC, SQIL, TD3fD, SIR3
 
 import time
@@ -26,6 +26,13 @@ nohup xxx > out1.txt 2>&1 &
 nohup xxx > /dev/null 2>&1 &
 
 python run.py --env Reacher-v2 --policy SIR3 --isSparse --reLabeling
+nohup python run.py --env JSBSim-v0 --policy R2 --isSparse --reLabeling > /dev/null 2>&1 &
+nohup python run.py --env JSBSim-v0 --policy TD3 --remark 200误差距离 > /dev/null 2>&1 &
+nohup python run.py --env JSBSim-v0 --policy R2 --isSparse --reLabeling --trainWithoutBC --remark 400误差距离 > /dev/null 2>&1 &
+nohup python run.py --env JSBSim-v0 --policy R2 --isSparse --reLabelingSuccess  --lrDecay --seed 3 --remark 400误差距离_增大buffer_学习率衰减 > /dev/null 2>&1 &
+nohup python run.py --env JSBSim-v0 --policy R2 --isSparse --reLabeling --remark 400误差距离_固定bcloss > /dev/null 2>&1 &
+nohup python run.py --env JSBSim-v0 --policy R2 --isSparse --reLabelingSuccess --trainWithoutBC --remark 400误差距离 > /dev/null 2>&1 &
+
 '''
 
 
@@ -99,10 +106,12 @@ def main():
         args.max_episode_steps = env._max_episode_steps
     else:
         env._max_episode_steps = args.max_episode_steps
-    if args.env == 'Reacher-v2':
-        env = ReacherWrapper(env, args.isSparse, args.overTimeReward)
-    elif args.env == 'Pusher-v2':
-        env = PusherWrapper(env, args.isSparse, args.overTimeReward)
+    if args.env == 'JSBSim-v0' and args.isSparse:
+        env.setSparese(args.isSparse)
+    # if args.env == 'Reacher-v2':
+    #     env = ReacherWrapper(env, args.isSparse, args.overTimeReward)
+    # elif args.env == 'Pusher-v2':
+    #     env = PusherWrapper(env, args.isSparse, args.overTimeReward)
     # else:
     #     env = XPositionWrapper(env, args.isSparse, args.overTimeReward, args.env)
 
@@ -138,10 +147,7 @@ def main():
     print(f"Policy: {args.policy}, Env: {args.env}, Seed: {args.seed}")
     print(f"Checkpoint: {exp_path}")
     print("---------------------------------------")
-    if 'Fetch' in args.env:
-        cfg_name = args.env.lower().replace('dense', '')
-    else:
-        cfg_name = args.env
+    cfg_name = args.env
     # cfg_policy = 'sir3' if 'sir3' in str(args.policy).lower() else args.policy
     cfg_policy = args.policy
     cfg_path = os.path.join('configs', str(cfg_name).replace('-', '_').lower(), str(cfg_policy).lower()+'.yaml')
@@ -215,8 +221,8 @@ def main():
     if args.bclossZoom is not None: cfg.hyper_params.bc_decay_zoom = args.bclossZoom
     if args.bclossFinalV is not None: cfg.hyper_params.bc_loss_FinalV = args.bclossFinalV
     # --- Environmental parameter ---
-    if 'Fetch' in args.env:
-        state_dim = env.observation_space['observation'].shape[0]+env.observation_space['desired_goal'].shape[0]
+    if 'JSBSim' in args.env:
+        state_dim = env.observation_space.shape[0] + 2
     else:
         state_dim = env.observation_space.shape[0]
     action_dim = env.action_space.shape[0]
@@ -262,6 +268,10 @@ def main():
         kwargs["noise_clip"] = cfg.noise_cfg.noise_clip * max_action
         kwargs["policy_freq"] = cfg.hyper_params.policy_freq
         policy = SQIL.SQIL(kwargs, cfg)
+    elif "sac" == cfg.policy.lower():
+        kwargs["alpha_init"] = cfg.hyper_params.alpha_init
+        kwargs["lr_alpha"] = cfg.learner_cfg.lr_alpha
+        policy = SAC.SAC(**kwargs)
     else:
         print(f"Unsupported policy:{cfg.policy}")
         exit(0)

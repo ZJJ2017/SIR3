@@ -21,29 +21,23 @@ from tensorboardX import SummaryWriter
 # Runs policy for X episodes and returns average reward
 # A fixed seed is used for the eval environment
 def eval_policy(policy, env_name, seed, eval_episodes=100, return_mode='666', render=False, save_gif_num=0, path=None):
-    if 'Fetch' in env_name:
-        import gymnasium
-        eval_env = gymnasium.make(env_name, policy.env.max_episode_steps, render_mode='rgb_array')
-        eval_env._max_episode_steps = eval_env.max_episode_steps = policy.env.max_episode_steps
-        eval_env = gymnasium_wrapper(eval_env, policy.env.is_sparse, policy.env.time_reward)
-        max_save_gif_num = save_gif_num = 0
+    eval_env = gym.make(env_name)
+    # eval_env.seed(seed + 666)
+    eval_env._max_episode_steps = eval_env.max_episode_steps = policy.env.max_episode_steps
+    if env_name == 'Reacher-v2':
+        eval_env = ReacherWrapper(eval_env, policy.env.is_sparse, policy.env.time_reward)
+        max_save_gif_num = save_gif_num * 2
+    elif env_name == 'Pusher-v2':
+        eval_env = PusherWrapper(eval_env, policy.env.is_sparse, policy.env.time_reward)
+        max_save_gif_num = save_gif_num * 2
     else:
-        eval_env = gym.make(env_name)
-        # eval_env.seed(seed + 666)
-        eval_env._max_episode_steps = eval_env.max_episode_steps = policy.env.max_episode_steps
-        if env_name == 'Reacher-v2':
-            eval_env = ReacherWrapper(eval_env, policy.env.is_sparse, policy.env.time_reward)
-            max_save_gif_num = save_gif_num*2
-        elif env_name == 'Pusher-v2':
-            eval_env = PusherWrapper(eval_env, policy.env.is_sparse, policy.env.time_reward)
-            max_save_gif_num = save_gif_num*2
-        else:
-            # eval_env = XPositionWrapper(eval_env, policy.env.is_sparse, policy.env.time_reward, env_name)
-            max_save_gif_num = save_gif_num
+        # eval_env = XPositionWrapper(eval_env, policy.env.is_sparse, policy.env.time_reward, env_name)
+        max_save_gif_num = save_gif_num
     # eval_env = policy.env.eval_env
     eval_env.seed(seed)
 
     score_list = []
+    step_list = []
     success_cnt = 0
     fail_cnt = 0
     gif_cnt = 0
@@ -53,8 +47,8 @@ def eval_policy(policy, env_name, seed, eval_episodes=100, return_mode='666', re
         os.makedirs(save_gif_path, exist_ok=True)
     for _ in range(eval_episodes):
         ep_r = 0.
+        ep_step = 0
         frames = []
-        state, done = eval_env.reset(), False
         state, done = eval_env.reset(), False
         while not done:
             if render:
@@ -66,9 +60,13 @@ def eval_policy(policy, env_name, seed, eval_episodes=100, return_mode='666', re
                 else:
                     frames.append(eval_env.render(mode='rgb_array'))
             action = policy.select_action(np.array(state))
+            if isinstance(policy.env.action_space, gym.spaces.Box):
+                action = unscale_action(policy.env.action_space.low, policy.env.action_space.high, action)
             state, reward, done, info = eval_env.step(action)
             ep_r += reward
+            ep_step += 1
         score_list.append(ep_r)
+        step_list.append(ep_step)
         
         if render:
             policy.log.record('ep_r:', ep_r)
@@ -92,11 +90,19 @@ def eval_policy(policy, env_name, seed, eval_episodes=100, return_mode='666', re
     reward_mean, reward_var = np.mean(score_list), np.var(score_list)
     reward_median = np.median(score_list)
     reward_min, reward_max = np.min(score_list), np.max(score_list)
+
+    step_mean, step_var = np.mean(step_list), np.var(step_list)
+    step_median = np.median(step_list)
+    step_min, step_max = np.min(step_list), np.max(step_list)
+
     success_ratio = success_cnt*100/eval_episodes
+
     if hasattr(policy, 'log'):
         policy.log.record("---------------------------------------")
         policy.log.record(f"Evaluation over {eval_episodes} episodes, success {success_cnt}, ({success_ratio:0.2f}%)")
         policy.log.record(f'mean/median reward {reward_mean:0.2f}/{reward_median:0.2f}, var {reward_var:0.2f}, max/min reward {reward_max:0.2f}/{reward_min:0.2f}')
+        print(
+            f'mean/median step {step_mean:0.2f}/{step_median:0.2f}, var {step_var:0.2f}, max/min step {step_max:0.2f}/{step_min:0.2f}')
         policy.log.record("---------------------------------------")
     if return_mode == 'mean':
         return reward_mean
@@ -104,6 +110,25 @@ def eval_policy(policy, env_name, seed, eval_episodes=100, return_mode='666', re
         return score_list, reward_mean, reward_var, success_ratio
     else:
         return score_list
+
+def scale_action(low, high, action):
+    """
+    Rescale the action from [low, high] to [-1, 1]
+    (no need for symmetric action space)
+
+    :param action: Action to scale
+    :return: Scaled action
+    """
+    return 2.0 * ((action - low) / (high - low)) - 1.0
+
+def unscale_action(low, high, scaled_action):
+    """
+    Rescale the action from [-1, 1] to [low, high]
+    (no need for symmetric action space)
+
+    :param scaled_action: Action to un-scale
+    """
+    return low + (0.5 * (scaled_action + 1.0) * (high - low))
 
 
 def train(policy, cfg):
@@ -160,9 +185,9 @@ def train(policy, cfg):
 
     if cfg.hyper_params.lrDecay:
         policy.actor_scheduler = optim.lr_scheduler.CosineAnnealingLR(
-            policy.actor_optimizer, cfg.hyper_params.total_timesteps, eta_min=cfg.learner_cfg.lr_actor/10)
+            policy.actor_optimizer, cfg.hyper_params.total_timesteps, eta_min=cfg.learner_cfg.lr_actor/2)
         policy.critic_scheduler = optim.lr_scheduler.CosineAnnealingLR(
-            policy.critic_optimizer, cfg.hyper_params.total_timesteps, eta_min=cfg.learner_cfg.lr_critic/10)
+            policy.critic_optimizer, cfg.hyper_params.total_timesteps, eta_min=cfg.learner_cfg.lr_critic/2)
 
     train_time = 0
     start_time = time.time()
@@ -173,14 +198,28 @@ def train(policy, cfg):
 
         # Select action randomly or according to policy
         if t < cfg.hyper_params.start_timesteps:
-            action = policy.env.action_space.sample()
+            unscaled_a = policy.env.action_space.sample()
         else:
-            action = (
-                policy.select_action(np.array(state))
-                + np.random.normal(0, cfg.env.max_action * cfg.noise_cfg.expl_noise, size=cfg.env.action_dim)
-            ).clip(-cfg.env.max_action, cfg.env.max_action)
+            # action = (
+            #     policy.select_action(np.array(state))
+            #     + np.random.normal(0, cfg.env.max_action * cfg.noise_cfg.expl_noise, size=cfg.env.action_dim)
+            # ).clip(-cfg.env.max_action, cfg.env.max_action)
+            temp_a = policy.select_action(np.array(state))
+            unscaled_a = unscale_action(policy.env.action_space.low, policy.env.action_space.high, temp_a)
+        if isinstance(policy.env.action_space, gym.spaces.Box):
+            scaled_a = scale_action(policy.env.action_space.low, policy.env.action_space.high, unscaled_a)
+
+            # Add noise to the action (improve exploration)
+            if t > cfg.hyper_params.start_timesteps:
+                scaled_a = (scaled_a + np.random.normal(0, cfg.env.max_action * cfg.noise_cfg.expl_noise, size=cfg.env.action_dim)
+                            ).clip(-cfg.env.max_action, cfg.env.max_action)
+
+            # We store the scaled action in the buffer
+            action = scaled_a
+            unscaled_a = unscale_action(policy.env.action_space.low, policy.env.action_space.high, scaled_a)
+
         # Perform action
-        next_state, reward, done, info = policy.env.step(action)
+        next_state, reward, done, info = policy.env.step(unscaled_a)
         done_bool = float(done) if episode_timesteps < cfg.env.max_episode_steps else 0
 
         if not cfg.hyper_params.skipBufferUpdate:
@@ -262,7 +301,7 @@ def train(policy, cfg):
     policy.load(os.path.join(cfg.exp_path, 'best_model.pt'))
     # gif_num = 1 if cfg.env.max_episode_steps > 500 else 5
     gif_num = 0
-    test_result = eval_policy(policy, cfg.env.name, cfg.seed+666, 1000, path=cfg.exp_path, save_gif_num=gif_num)  # Final evaluation 1000 rounds
+    test_result = eval_policy(policy, cfg.env.name, cfg.seed+666, 100, path=cfg.exp_path, save_gif_num=gif_num)  # Final evaluation 1000 rounds
     for _i, it in enumerate(evaluations):
         writer.add_scalar('test/reward', it, _i)
     plotSmoothAndSaveFig(50, evaluations, test_record_fig)

@@ -1,0 +1,43 @@
+hyper_params:
+  gamma: 0.99
+  tau: 0.005
+  batch_size: 256
+  buffer_size: 600000
+  expert_buffer_size: 300000
+  start_timesteps: 0
+  total_timesteps: 1000000
+  policy_freq: 2
+  alpha_init: 0.2
+  # R2
+  bcLossRatio: 2
+  rlLossRatio: 1
+  per_alpha: 0.3
+  per_beta: 1.0
+  per_eps: 0.000006
+  per_eps_demo: 1.0 
+  nStep: 1
+  nStepLossRation: 1
+  pretrainStep: 0
+  randomSampleNumInPretrain: 5000
+  lambda3: 1.0  # actor loss contribution of prior weight
+  rewardThreshold: -30
+  demo_path: ["data/suboptimal/jsbsim_v0/jsbsim_sac_45_871.pkl", ]
+  # decay
+  sample_decay_zoom: 1
+  bc_decay_zoom: 0.5
+  bc_loss_FinalV: 0.1
+  explore_beta: 1
+  # Discriminator
+  d_gradient_steps: 10
+  train_discriminator_freq: 500
+
+learner_cfg:
+  lr_actor: 0.0003
+  lr_critic: 0.0003
+  lr_alpha: 0.0003
+  weight_decay: 0.05
+
+noise_cfg:
+  expl_noise: 0.01
+  policy_noise: 0.2
+  noise_clip: 0.5

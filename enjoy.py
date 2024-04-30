@@ -19,12 +19,9 @@ import gym
 from utils.envWrapper import ReacherWrapper, PusherWrapper, XPositionWrapper, RobosuiteWrapper, gymnasium_wrapper
 from utils.helper_functions import set_random_seed
 from utils.config import YamlConfig, ConfigDict
-from rl_algorithms import TD3, SQIL, TD3fD, R2
+from rl_algorithms import TD3, SQIL, TD3fD, R2, SAC
+import jsbsim_gym.jsbsim_gym # This line makes sure the environment is registered
 
-# robosuite类包影响gif，导入gym不能生成gif，不导入gymnasium不能生成
-# import robosuite as suite
-# from robosuite import load_controller_config
-# from robosuite.wrappers import GymWrapper
 
 # to gif
 import matplotlib.pyplot as plt 
@@ -40,28 +37,31 @@ def display_frames_as_gif(frames, id, path):
     anim.save(os.path.join(path, f'{id}.gif'), writer='pillow', fps=30)
     plt.close()
 
+def unscale_action(low, high, scaled_action):
+    """
+    Rescale the action from [-1, 1] to [low, high]
+    (no need for symmetric action space)
+
+    :param scaled_action: Action to un-scale
+    """
+    return low + (0.5 * (scaled_action + 1.0) * (high - low))
 
 # Runs policy for X episodes and returns average reward
 # A fixed seed is used for the eval environment
 def eval_policy(policy, env_name, seed, eval_episodes=100, return_mode='666', render=False, save_demo=False, save_gif=False, path=None, log=True, action_noise=0):
-    if 'Fetch' in env_name:
-        import gymnasium
-        import robosuite  # 避免 GLFWError: (65544) b'X11: The DISPLAY environment variable is missing'
-        eval_env = gymnasium.make(env_name, policy.env.max_episode_steps, render_mode='rgb_array')
-        eval_env._max_episode_steps = eval_env.max_episode_steps = policy.env.max_episode_steps
-        eval_env = gymnasium_wrapper(eval_env, policy.env.is_sparse, policy.env.time_reward)
-    else:
-        eval_env = gym.make(env_name)
-        eval_env._max_episode_steps = eval_env.max_episode_steps = policy.env.max_episode_steps
-        if env_name == 'Reacher-v2':
-            eval_env = ReacherWrapper(eval_env, policy.env.is_sparse, policy.env.time_reward)
-        elif env_name == 'Pusher-v2':
-            eval_env = PusherWrapper(eval_env, policy.env.is_sparse, policy.env.time_reward)
-        else:
-            eval_env = XPositionWrapper(eval_env, policy.env.is_sparse, policy.env.time_reward, env_name)
+
+    eval_env = gym.make(env_name)
+    eval_env._max_episode_steps = eval_env.max_episode_steps = policy.env.max_episode_steps
+    # if env_name == 'Reacher-v2':
+    #     eval_env = ReacherWrapper(eval_env, policy.env.is_sparse, policy.env.time_reward)
+    # elif env_name == 'Pusher-v2':
+    #     eval_env = PusherWrapper(eval_env, policy.env.is_sparse, policy.env.time_reward)
+    # else:
+    #     eval_env = XPositionWrapper(eval_env, policy.env.is_sparse, policy.env.time_reward, env_name)
     eval_env.seed(seed)
 
     score_list = []
+    step_list = []
     all_demo_ls = []
     demo_ep_r = []
     if save_demo:
@@ -72,8 +72,10 @@ def eval_policy(policy, env_name, seed, eval_episodes=100, return_mode='666', re
         os.makedirs(save_gif_path, exist_ok=True)
 
     tr_cnt = 0
+    success_cnt = 0
     for i in range(eval_episodes):
         ep_r = 0.
+        ep_step = 0
         demo_ls = []
         frames = []
         state, done = eval_env.reset(), False
@@ -83,10 +85,7 @@ def eval_policy(policy, env_name, seed, eval_episodes=100, return_mode='666', re
                 eval_env.render()
                 time.sleep(0.01)
             elif save_gif:
-                if 'Fetch' in env_name:
-                    frames.append(eval_env.render())
-                else:
-                    frames.append(eval_env.render(mode='rgb_array'))
+                frames.append(eval_env.render(mode='rgb_array'))
             last_state = copy.deepcopy(state)
             action = policy.select_action(np.array(state))
             if action_noise > 0:
@@ -94,17 +93,29 @@ def eval_policy(policy, env_name, seed, eval_episodes=100, return_mode='666', re
                     action
                     + np.random.normal(0, action_noise, size=len(action))
                 ).clip(-policy.env.max_action, policy.env.max_action)
+            if isinstance(policy.env.action_space, gym.spaces.Box):
+                action = unscale_action(policy.env.action_space.low, policy.env.action_space.high, action)
             state, reward, done, info = eval_env.step(action)
-            if eval_env.judge(state, info) and not success: success = True
-            demo_ls.append((last_state, action, reward, state, done, info))
+            if info.get('success') is not None:
+                if info['success']:
+                    success = True
+                    success_cnt += 1
+            # if eval_env.judge(state, info) and not success: success = True
+            if save_demo:
+                demo_ls.append((last_state, action, reward, state, done, info))
             ep_r += reward
+            ep_step += 1
         score_list.append(ep_r)
-        if (render or save_gif or save_demo) and log:
-            print(len(demo_ls), 'ep_r:', ep_r)    
-            reward_mean, reward_var = np.mean(score_list), np.var(score_list)
-            reward_median = np.median(score_list)
-            reward_min, reward_max = np.min(score_list), np.max(score_list)
-            print(f'mean/median reward {reward_mean:0.2f}/{reward_median:0.2f}, var {reward_var:0.2f}, max/min reward {reward_max:0.2f}/{reward_min:0.2f}')
+        step_list.append(ep_step)
+        if log:
+            print("ep:", i, ", ep_r:", ep_r, ", ep_step:", ep_step, "success" if success else "fail" )
+        # if (render or save_gif or save_demo) and log:
+        #     if save_demo:
+        #         print(len(demo_ls), 'ep_r:', ep_r)
+        #     reward_mean, reward_var = np.mean(score_list), np.var(score_list)
+        #     reward_median = np.median(score_list)
+        #     reward_min, reward_max = np.min(score_list), np.max(score_list)
+        #     print(f'mean/median reward {reward_mean:0.2f}/{reward_median:0.2f}, var {reward_var:0.2f}, max/min reward {reward_max:0.2f}/{reward_min:0.2f}')
         good = True # if not success else False
         # good = True if -50 < ep_r < -35 and len(demo_ls) < 1000 else False
         if good: tr_cnt += 1
@@ -128,9 +139,18 @@ def eval_policy(policy, env_name, seed, eval_episodes=100, return_mode='666', re
     reward_mean, reward_var = np.mean(score_list), np.var(score_list)
     reward_median = np.median(score_list)
     reward_min, reward_max = np.min(score_list), np.max(score_list)
+
+    step_mean, step_var = np.mean(step_list), np.var(step_list)
+    step_median = np.median(step_list)
+    step_min, step_max = np.min(step_list), np.max(step_list)
+
+    success_rate = success_cnt / eval_episodes
+
     print("---------------------------------------")
     print(f"Evaluation over {eval_episodes} episodes")
     print(f'mean/median reward {reward_mean:0.2f}/{reward_median:0.2f}, var {reward_var:0.2f}, max/min reward {reward_max:0.2f}/{reward_min:0.2f}')
+    print(f'mean/median step {step_mean:0.2f}/{step_median:0.2f}, var {step_var:0.2f}, max/min step {step_max:0.2f}/{step_min:0.2f}')
+    print("success_rate ", success_rate)
     print("---------------------------------------")
     if return_mode == 'mean':
         return reward_mean
@@ -143,13 +163,9 @@ def eval_policy(policy, env_name, seed, eval_episodes=100, return_mode='666', re
 def parse_args() -> argparse.Namespace:
     # configurations
     parser = argparse.ArgumentParser(description="Pytorch RL rl_algorithms")
-    parser.add_argument("--env", default="Reacher-v2", help="OpenAI gym environment name")
+    parser.add_argument("--env", default="JSBSim-v0", help="OpenAI gym environment name")
     parser.add_argument("--policy", default="TD3", help="policy name")
     parser.add_argument("--seed", type=int, default=222222, help="random seed for reproducibility")
-    parser.add_argument("--start_timesteps", default=5000, type=int, help="Time steps initial random policy is used")
-    parser.add_argument("--total_timesteps", type=int, default=500000, help="total step num")
-    parser.add_argument("--eval_freq", type=int, default=50000, help="eval model freq")
-    parser.add_argument("--save_freq", type=int, default=10000, help="save model freq")
     parser.add_argument("--max_episode_steps", type=int, default=None, help="max episode step")
     parser.add_argument("--eval_episodes", type=int, default=10, help="episode of test during training")
     parser.add_argument("--load_model", default="", help="Model load file name")
@@ -177,64 +193,27 @@ def main():
         args.render = False
 
     if args.load_model != "":
-        if 'reacher_v2' in args.load_model:
-            args.env = 'Reacher-v2'
-        elif 'pusher_v2' in args.load_model:
-            args.env = 'Pusher-v2'
-        elif 'halfcheetah' in args.load_model:
-            args.env = 'HalfCheetah-v2'
-        elif 'hopper' in args.load_model:
-            args.env = 'Hopper-v2'
-        elif 'walker2d' in args.load_model:
-            args.env = 'Walker2d-v2'
-        elif 'swimmer' in args.load_model:
-            args.env = 'Swimmer-v2'
-        elif 'ant' in args.load_model:
-            args.env = 'Ant-v2'
-        elif 'humanoid' in args.load_model:
-            args.env = 'Humanoid-v2'
-        elif 'fetchpush' in args.load_model:
-            args.env = 'FetchPushDense-v2'
-        elif 'fetchreach' in args.load_model:
-            args.env = 'FetchReachDense-v2'
-        elif 'fetchpick' in args.load_model:
-            args.env = 'FetchPickAndPlaceDense-v2'
-        elif 'fetchslide' in args.load_model:
-            args.env = 'FetchSlideDense-v2'
-        if 'td3' in args.load_model or 'sir3' in args.load_model:
+        if 'jsbsim' in args.load_model:
+            args.env = 'JSBSim-v0'
+        if 'td3' in args.load_model or 'r2' in args.load_model:
             args.policy = 'TD3'
-        elif 'ddpg' in args.load_model:
-            args.policy = 'DDPG'
-        elif 'sqil' in args.load_model:
-            args.policy = 'SQIL'
-        elif 'sac' in args.load_model:
-            args.policy = 'SAC'
     if 'pt' not in args.load_model:
         args.load_model = os.path.join(args.load_model, 'best_model.pt')
     if 'overtime' in args.load_model:
         args.overTimeReward = True
 
     # env initialization
-    if 'Fetch' in args.env:
-        import gymnasium
-        if args.max_episode_steps is not None:
-            env = gymnasium.make(args.env, args.max_episode_steps)
-        else:
-            env = gymnasium.make(args.env)
+    env = gym.make(args.env)
+    if args.max_episode_steps is None:
         args.max_episode_steps = env._max_episode_steps
-        env = gymnasium_wrapper(env, args.isSparse, args.overTimeReward)
     else:
-        env = gym.make(args.env)
-        if args.max_episode_steps is None:
-            args.max_episode_steps = env._max_episode_steps
-        else:
-            env._max_episode_steps = args.max_episode_steps
-        if args.env == 'Reacher-v2':
-            env = ReacherWrapper(env, args.isSparse, args.overTimeReward)
-        elif args.env == 'Pusher-v2':
-            env = PusherWrapper(env, args.isSparse, args.overTimeReward)
-        else:
-            env = XPositionWrapper(env, args.isSparse, args.overTimeReward, args.env)
+        env._max_episode_steps = args.max_episode_steps
+    # if args.env == 'Reacher-v2':
+    #     env = ReacherWrapper(env, args.isSparse, args.overTimeReward)
+    # elif args.env == 'Pusher-v2':
+    #     env = PusherWrapper(env, args.isSparse, args.overTimeReward)
+    # else:
+    #     env = XPositionWrapper(env, args.isSparse, args.overTimeReward, args.env)
 
     # set a random seed
     set_random_seed(args.seed, env)
@@ -250,12 +229,7 @@ def main():
     print(f"Policy: {args.policy}, Env: {args.env}, Seed: {args.seed}")
     print(f"Checkpoint: {exp_path}")
     print("---------------------------------------")
-    if 'rob' in args.env:
-        cfg_name = 'rob' 
-    elif 'Fetch' in args.env:
-        cfg_name = args.env.lower().replace('dense', '')
-    else:
-        cfg_name = args.env
+    cfg_name = args.env
     cfg_policy = 'sir3' if 'sir3' in str(args.policy).lower() else args.policy
     cfg_path = os.path.join('configs', str(cfg_name).replace('-', '_').lower(), str(cfg_policy).lower()+'.yaml')
     cfg = YamlConfig(cfg_path).get_config_dict()
@@ -264,17 +238,13 @@ def main():
     cfg.seed = args.seed
     cfg.test = args.test
     # --- Experimental parameter ---
-    cfg.hyper_params.eval_freq = args.eval_freq
-    cfg.hyper_params.save_freq = args.save_freq
     cfg.hyper_params.eval_episodes = args.eval_episodes
-    cfg.hyper_params.start_timesteps = args.start_timesteps
-    cfg.hyper_params.total_timesteps = args.total_timesteps
     # exp
     cfg.hyper_params.overTimeReward = args.overTimeReward
     cfg.hyper_params.isSparse = args.isSparse
     # --- Environmental parameter ---
-    if 'Fetch' in args.env:
-        state_dim = env.observation_space['observation'].shape[0]+env.observation_space['desired_goal'].shape[0]
+    if 'JSBSim' in args.env:
+        state_dim = env.observation_space.shape[0] + 2
     else:
         state_dim = env.observation_space.shape[0]
     action_dim = env.action_space.shape[0]
@@ -310,27 +280,26 @@ def main():
         kwargs["noise_clip"] = cfg.noise_cfg.noise_clip * max_action
         kwargs["policy_freq"] = cfg.hyper_params.policy_freq
         if "fd" in cfg.policy.lower():
-            if "ex" in cfg.policy.lower():
-                policy = SIR3.EXTD3fD(kwargs, cfg)
-            else:
-                policy = TD3fD.TD3fD(kwargs, cfg)
+            policy = TD3fD.TD3fD(kwargs, cfg)
         else:
             policy = TD3.TD3(**kwargs)
-    elif "sac" in cfg.policy.lower():
-        kwargs["alpha_init"] = cfg.hyper_params.alpha_init
-        kwargs["lr_alpha"] = cfg.learner_cfg.lr_alpha
-        policy = SAC.SAC(**kwargs)
-    elif "ddpg" in cfg.policy.lower():
-        policy = DDPG.DDPG(**kwargs)
+    elif "r2" in cfg.policy.lower():
+        kwargs["policy_noise"] = cfg.noise_cfg.policy_noise * max_action
+        kwargs["noise_clip"] = cfg.noise_cfg.noise_clip * max_action
+        kwargs["policy_freq"] = cfg.hyper_params.policy_freq
+        policy = R2.R2(kwargs, cfg)
     elif "sqil" in cfg.policy.lower():
         kwargs["policy_noise"] = cfg.noise_cfg.policy_noise * max_action
         kwargs["noise_clip"] = cfg.noise_cfg.noise_clip * max_action
         kwargs["policy_freq"] = cfg.hyper_params.policy_freq
         policy = SQIL.SQIL(kwargs, cfg)
+    elif "sac" == cfg.policy.lower():
+        kwargs["alpha_init"] = cfg.hyper_params.alpha_init
+        kwargs["lr_alpha"] = cfg.learner_cfg.lr_alpha
+        policy = SAC.SAC(**kwargs)
     else:
         print(f"Unsupported policy:{cfg.policy}")
         exit(0)
-
     if args.load_model != "":
         print("policy load ...")
         policy.load(args.load_model)
@@ -342,7 +311,7 @@ def main():
     save_path = os.path.join(save_path, str(args.env).replace('-', '_').lower(), str(args.policy).lower(), remark_str)
     # GO GO GO
     eval_policy(
-        policy, cfg.env.name, cfg.seed+666, eval_episodes=10000,
+        policy, cfg.env.name, cfg.seed+666, eval_episodes=args.eval_episodes,
         render=args.render, save_demo=args.save_demo, save_gif=args.save_gif, path=save_path, action_noise=args.action_noise
     )
 

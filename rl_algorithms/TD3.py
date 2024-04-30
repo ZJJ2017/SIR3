@@ -183,7 +183,7 @@ class TD3(object):
         if self.loss_episode:
             avg_loss = np.vstack(self.loss_episode).mean(axis=0)
             log_value = (avg_loss)
-            self.write_log(log_value)
+            # self.write_log(log_value)
             self.loss_episode = []
             return log_value
 

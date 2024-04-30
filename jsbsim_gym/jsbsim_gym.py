@@ -2,9 +2,12 @@ import jsbsim
 import gym
 
 import numpy as np
+# import torch
 
 from .visualization.rendering import Viewer, load_mesh, load_shader, RenderObject, Grid
 from .visualization.quaternion import Quaternion
+
+# from jsbsim_gym.features import JSBSimFeatureExtractor
 
 # Initialize format for the environment state vector
 STATE_FORMAT = [
@@ -102,13 +105,17 @@ class JSBSimEnv(gym.Env):
         self._set_initial_conditions()
         self.simulation.run_ic()
 
-        print(self.simulation.query_property_catalog(""))
+        # print(self.simulation.query_property_catalog(""))
 
         self.down_sample = 4
         self.state = np.zeros(12)
         self.goal = np.zeros(3)
-        self.dg = 100
+        self.dg = 400
         self.viewer = None
+
+        # self.featureExt = JSBSimFeatureExtractor(self.observation_space)
+        self.absorption = True
+        self.opt_n = 800
 
     def _set_initial_conditions(self):
         # Set engines running, forward velocity, and altitude
@@ -142,6 +149,8 @@ class JSBSimEnv(gym.Env):
 
         reward = 0
         done = False
+        info = {}
+        info["success"] = False
 
         # Check for collision with ground
         if self.state[2] < 10:
@@ -152,9 +161,43 @@ class JSBSimEnv(gym.Env):
         if np.sqrt(np.sum((self.state[:2] - self.goal[:2])**2)) < self.dg and abs(self.state[2] - self.goal[2]) < self.dg:
             reward = 10
             done = True
-        
-        return np.hstack([self.state, self.goal]), reward, done, {}
-    
+            info["success"] = True
+
+        return np.hstack([self.state, self.goal]), reward, done, info
+
+    def preObs(self, obs):
+        # Unpack
+        position = obs[:3]
+        mach = obs[3:4]
+        alpha_beta = obs[4:6]
+        angular_rates = obs[6:9]
+        phi_theta = obs[9:11]
+        psi = obs[11:12]
+        goal = obs[12:]
+
+        # Transform position
+        displacement = goal - position
+        distance = np.sqrt(np.sum(displacement[:2] ** 2))
+        dz = displacement[2:3]
+        altitude = position[2:3]
+        abs_bearing = np.arctan2(displacement[1:2], displacement[0:1])
+        rel_bearing = abs_bearing - psi
+
+        # We normalize distance this way to bound it between 0 and 1
+        dist_norm = np.array([1 / (1 + distance * 1e-3)])
+
+        # Normalize these by approximate flight ceiling
+        dz_norm = dz / 15000
+        alt_norm = altitude / 15000
+
+        # Angles to Sine/Cosine pairs
+        cab, sab = np.cos(alpha_beta), np.sin(alpha_beta)
+        cpt, spt = np.cos(phi_theta), np.sin(phi_theta)
+        cr, sr = np.cos(rel_bearing), np.sin(rel_bearing)
+
+        return np.concatenate((dist_norm, dz_norm, alt_norm, mach, angular_rates, cab, sab, cpt, spt, cr, sr))
+
+
     def _get_state(self):
         # Gather all state properties from JSBSim
         for i, property in enumerate(STATE_FORMAT):
@@ -257,19 +300,32 @@ class PositionReward(gym.Wrapper):
     def __init__(self, env, gain):
         super().__init__(env)
         self.gain = gain
-    
+        # self.ep_step = 0
+
+    def setSparese(self, is_sparse):
+        if is_sparse:
+            self.gain = 0
+            self.is_sparse = True
     def step(self, action):
+        # self.ep_step += 1
         obs, reward, done, info = super().step(action)
         displacement = obs[-3:] - obs[:3]
         distance = np.linalg.norm(displacement)
         reward += self.gain * (self.last_distance - distance)
         self.last_distance = distance
+        obs = self.preObs(obs)
+        # if not done and self.ep_step == 1200:
+        #     reward = -10
+
         return obs, reward, done, info
     
     def reset(self):
         obs = super().reset()
         displacement = obs[-3:] - obs[:3]
         self.last_distance = np.linalg.norm(displacement)
+        # t_obs = self.featureExt(torch.Tensor(np.array([obs])))
+        obs = self.preObs(obs)
+        # self.ep_step = 0
         return obs
 
 # Create entry point to wrapped environment

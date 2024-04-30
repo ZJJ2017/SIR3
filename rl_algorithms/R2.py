@@ -243,8 +243,8 @@ class R2(TD3fD):
         self.memory.addWithEpR(tran2, np.array(self.episode_r))
 
     def update_buffer(self, curr_state, action, next_state, reward, done_bool, done, info):
-        if info.get('success') is not None and self.env.absorption:  # absorption state env
-            done_bool = info['success']
+        # if info.get('success') is not None and self.env.absorption:  # absorption state env
+        #     done_bool = info['success']
         if self.hyper_params.overTimeDone: done_bool = float(done)
         transition = (curr_state, action, reward, next_state, done_bool, done, info)
         self.episode_buffer.append(transition)
@@ -289,11 +289,12 @@ class R2(TD3fD):
                     else:
                         temp_r = reward
                         if self.hyper_params.reLabelingSuccess:
-                            success = self.episode_buffer[-1][-3]
+                            # success = self.episode_buffer[-1][-3]
+                            success = info['success']
                             if success and i > len(self.episode_buffer)-self.env.opt_n:
                                 temp_r = (self.episode_r / self.env.opt_n) * (1 - success_rate)
 
-                    if self.episode_r > threshold and self.pretrainDone and self.sample_schedule.current_value > 0:
+                    if self.episode_r >= threshold and self.pretrainDone and self.sample_schedule.current_value > 0:
                         if self.hyper_params.reLabelingSqil: temp_r = 1
                         if self.hyper_params.useDiscriminator:
                             temp_r = self.discr.predict_reward(
@@ -303,6 +304,7 @@ class R2(TD3fD):
                         tran2 = (curr_state, action, temp_r, next_state, done_bool)
                         self.expert_memory.addWithEpR(tran2, np.array(self.episode_r))
                     else:
+                        # temp_r = reward
                         if self.hyper_params.reLabelingSqil: temp_r = 0
                         if self.hyper_params.useDiscriminator:
                             temp_r = self.discr.predict_reward(

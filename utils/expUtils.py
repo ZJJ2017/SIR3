@@ -214,33 +214,31 @@ def demo_re_labeling(env, demos, reLabeling=False, overtimeDone=False, reLabelin
     ep_step = 0
     ignore = False
     for d_tp in demos:
-        if env.absorption:
-            if ep_step % env.max_episode_steps == 0 and ep_step != 0:
-                ep_step = 0
-                ignore = False
-            if ep_step < env.max_episode_steps and ignore:
-                ep_step += 1
-                continue
+        # if env.absorption:
+        #     if ep_step % env.max_episode_steps == 0 and ep_step != 0:
+        #         ep_step = 0
+        #         ignore = False
+        #     if ep_step < env.max_episode_steps and ignore:
+        #         ep_step += 1
+        #         continue
         demo_obs, demo_action, demo_reward, demo_next_obs, demo_done = d_tp[:5]
         info = None if len(d_tp) == 5 else d_tp[5]
         terminated, truncated = False, demo_done
-        if env.is_sparse:
-            demo_reward, terminated, truncated = env.sparse_reward(demo_next_obs, demo_reward, demo_done, info)
-        if overtimeDone: terminated = terminated or truncated
+        if truncated and ep_step != env.max_episode_steps - 1:
+            terminated = True
+
+        # if env.is_sparse:
+        #     demo_reward, terminated, truncated = env.sparse_reward(demo_next_obs, demo_reward, demo_done, info)
+        # if overtimeDone: terminated = terminated or truncated
         _sum_rewards += demo_reward
         _demo_t.append((demo_obs, demo_action, demo_reward, demo_next_obs, terminated, truncated))
         ep_step += 1
         if terminated or truncated:
-            ignore = True
-            if reLabelingLinear is not None:
-                sp_r = reLabelingLinear if _sum_rewards > 0 else -reLabelingLinear
-                sr = split_ratio(len(_demo_t), 1-sp_r, 1+sp_r)
+            _sum_rewards = 10.
+            # ignore = True
             for i, _d in enumerate(_demo_t):
                 if reLabeling:
-                    if reLabelingLinear is not None:
-                        _re_reward = _d[2] if _d[4] and not reLabelingDone else _sum_rewards / len(_demo_t) * sr[i]
-                    else:
-                        _re_reward = _d[2] if _d[4] and not reLabelingDone else _sum_rewards / len(_demo_t)
+                    _re_reward = _d[2] if _d[4] and not reLabelingDone else _sum_rewards / len(_demo_t)
                     # if _d[5] and env.r_fail != 0 and (len(_demo_t) != env.max_episode_steps): _re_reward = env.r_fail
                 else:
                     _re_reward = _d[2]
@@ -256,10 +254,10 @@ def demo_re_labeling(env, demos, reLabeling=False, overtimeDone=False, reLabelin
             _sum_rewards = 0
 
     # Time feature processing
-    if env.time_reward is not None and len(_demo_ls[0][0]) < env.state_dim:
-        _demo_ls = addTimeFeature(_demo_ls, env.max_episode_steps)
-    elif env.time_reward is None and len(_demo_ls[0][0]) > env.state_dim:
-        _demo_ls = rmTimeFeature(_demo_ls)
+    # if env.time_reward is not None and len(_demo_ls[0][0]) < env.state_dim:
+    #     _demo_ls = addTimeFeature(_demo_ls, env.max_episode_steps)
+    # elif env.time_reward is None and len(_demo_ls[0][0]) > env.state_dim:
+    #     _demo_ls = rmTimeFeature(_demo_ls)
 
     return _demo_ls, _ep_r_his
 
